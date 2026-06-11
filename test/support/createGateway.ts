@@ -27,7 +27,7 @@ import type { Downstream } from '../../src/mcp/downstream';
 import { stubMcpServer, type StubMcpServer } from './stubMcpServer';
 import type { McpProxyClient } from '../../src/mcp/proxy';
 import type { OpenApiDoc } from './committedSpec';
-import { defaultBundleFor } from './bundles';
+import { defaultBundleFor, loadRecordedTraffic } from './bundles';
 import { agentId } from '../../fixtures/principals';
 
 export interface CreateGatewayOptions {
@@ -146,6 +146,7 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     downstreams: [toDownstream(files), toDownstream(egress)],
     identity: { principal: agentId },
     tracer: opts.tracer as Tracer | undefined,
+    recordedTraffic: loadRecordedTraffic(),
   });
 
   const client: GatewayClient = {
@@ -170,11 +171,11 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     async loadPolicy(b) {
       return core.loadPolicy(b);
     },
-    async simulateAction() {
-      return NOT_WIRED('simulate/action');
+    async simulateAction(proposal) {
+      return core.simulateAction(proposal);
     },
-    async simulatePolicy() {
-      return NOT_WIRED('simulate/policy');
+    async simulatePolicy(req) {
+      return core.simulatePolicy(req.change);
     },
     async reconcile() {
       return NOT_WIRED('reconcile');

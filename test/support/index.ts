@@ -34,6 +34,9 @@ export {
   defaultBundleFor,
   emptyBundle,
   stricterPolicy,
+  tightenEgress,
+  contradictoryCedar,
+  loadRecordedTraffic,
 } from './bundles';
 export {
   proposal,
