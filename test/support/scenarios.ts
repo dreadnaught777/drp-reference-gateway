@@ -25,8 +25,8 @@ export const sharedScenarioSet: ActionProposal[] = [
   readFileProposal('etc/passwd'), // deny - read outside the sandbox
   writeFileProposal('sandbox/out.txt'), // escalate
   deleteFileProposal('sandbox/old.txt'), // escalate
-  egressProposal(ALLOWLISTED_DOMAIN), // allow
-  egressProposal('evil.example'), // deny - not the allow-listed domain
+  egressProposal({ domain: ALLOWLISTED_DOMAIN }), // allow
+  egressProposal({ domain: 'evil.example' }), // deny - not the allow-listed domain
   proposal({ tool: 'exotic_tool' }), // deny - no rule matches
 ];
 
@@ -42,3 +42,9 @@ export function expectedDecision(p: ActionProposal): Effect {
  * recorded entries are dated 2026-06-10, so this includes all of them.
  */
 export const t0 = '2026-06-01T00:00:00.000Z';
+
+// Demo-scenario constants (Suite K).
+export const ALLOWLISTED = ALLOWLISTED_DOMAIN;
+export const PROTECTED_DATA = 'PROTECTED:customer-records';
+export const t1 = '2026-06-10T10:00:00.000Z';
+export const t2 = '2026-06-10T11:30:00.000Z';

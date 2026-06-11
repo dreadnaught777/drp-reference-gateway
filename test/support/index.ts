@@ -44,10 +44,24 @@ export {
   writeFileProposal,
   deleteFileProposal,
   egressProposal,
+  readCrmProposal,
+  sendExternalProposal,
+  artefactWriteProposal,
+  artefactReadProposal,
+  artefactAdmission,
   p1,
   p2,
 } from './proposals';
-export { sharedScenarioSet, expectedDecision, t0 } from './scenarios';
+export {
+  sharedScenarioSet,
+  expectedDecision,
+  t0,
+  t1,
+  t2,
+  ALLOWLISTED,
+  PROTECTED_DATA,
+} from './scenarios';
+export { mutate } from './context';
 export { arbitrationSources } from './arbitrationSources';
 export { hash, jcs, sampleA, reorderKeys } from './receiptHelpers';
 export { createOtelHarness } from './otel';
