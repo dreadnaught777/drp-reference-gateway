@@ -11,23 +11,43 @@ import type { PolicyBundle, PolicyManifest } from '../../src/types';
 
 const cedarUrl = new URL('../../fixtures/policy.cedar', import.meta.url);
 const manifestUrl = new URL('../../fixtures/drp.manifest.json', import.meta.url);
+const wasmUrl = new URL('../../fixtures/policy.wasm', import.meta.url);
 
-function bundleVersionOf(source: string): string {
-  return `sha256:${createHash('sha256').update(source, 'utf8').digest('hex')}`;
+function bundleVersionOf(source: string | Uint8Array): string {
+  return `sha256:${createHash('sha256').update(source).digest('hex')}`;
+}
+
+function manifest(): PolicyManifest {
+  return JSON.parse(readFileSync(fileURLToPath(manifestUrl), 'utf8')) as PolicyManifest;
 }
 
 export function defaultCedarBundle(): PolicyBundle {
   const source = readFileSync(fileURLToPath(cedarUrl), 'utf8');
-  const manifest = JSON.parse(
-    readFileSync(fileURLToPath(manifestUrl), 'utf8'),
-  ) as PolicyManifest;
+  const m = manifest();
   return {
     bundleVersion: bundleVersionOf(source),
-    vocabulary: manifest.vocabulary,
+    vocabulary: m.vocabulary,
     engine: 'cedar',
     source,
-    rules: manifest.rules,
+    rules: m.rules,
   };
+}
+
+export function defaultOpaBundle(): PolicyBundle {
+  const wasm = readFileSync(fileURLToPath(wasmUrl));
+  const m = manifest();
+  return {
+    bundleVersion: bundleVersionOf(wasm),
+    vocabulary: m.vocabulary,
+    engine: 'opa',
+    wasm,
+    rules: m.rules,
+  };
+}
+
+/** The default bundle for a provider: Cedar source or the compiled Rego wasm. */
+export function defaultBundleFor(provider: 'cedar' | 'opa'): PolicyBundle {
+  return provider === 'opa' ? defaultOpaBundle() : defaultCedarBundle();
 }
 
 export const emptyBundle: PolicyBundle = {

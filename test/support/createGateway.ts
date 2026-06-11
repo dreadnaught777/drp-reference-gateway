@@ -27,7 +27,7 @@ import type { Downstream } from '../../src/mcp/downstream';
 import { stubMcpServer, type StubMcpServer } from './stubMcpServer';
 import type { McpProxyClient } from '../../src/mcp/proxy';
 import type { OpenApiDoc } from './committedSpec';
-import { defaultCedarBundle } from './bundles';
+import { defaultBundleFor } from './bundles';
 import { agentId } from '../../fixtures/principals';
 
 export interface CreateGatewayOptions {
@@ -138,7 +138,7 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
 
   const files = stubMcpServer('files');
   const egress = stubMcpServer('egress');
-  const bundle = opts.policy ?? defaultCedarBundle();
+  const bundle = opts.policy ?? defaultBundleFor(opts.provider);
 
   const core = createGatewayCore({
     provider: opts.provider,

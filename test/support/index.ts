@@ -28,8 +28,23 @@ export type { OpenApiDoc } from './committedSpec';
 export { stubModel } from './stubModel';
 export type { StubModel } from './stubModel';
 
-export { defaultCedarBundle, emptyBundle, stricterPolicy } from './bundles';
-export { proposal, readFileProposal, writeFileProposal, p1, p2 } from './proposals';
+export {
+  defaultCedarBundle,
+  defaultOpaBundle,
+  defaultBundleFor,
+  emptyBundle,
+  stricterPolicy,
+} from './bundles';
+export {
+  proposal,
+  readFileProposal,
+  writeFileProposal,
+  deleteFileProposal,
+  egressProposal,
+  p1,
+  p2,
+} from './proposals';
+export { sharedScenarioSet, expectedDecision } from './scenarios';
 export { hash, jcs, sampleA, reorderKeys } from './receiptHelpers';
 export { createOtelHarness } from './otel';
 export type { OtelHarness, RecordedEvent } from './otel';

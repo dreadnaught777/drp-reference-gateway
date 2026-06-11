@@ -41,6 +41,28 @@ export function writeFileProposal(path: string): ActionProposal {
   };
 }
 
+export function deleteFileProposal(path: string): ActionProposal {
+  return {
+    principal: agentId,
+    identitySource: 'native',
+    tool: 'delete_file',
+    args: { path },
+    resource: { kind: 'file', id: path },
+    declaredAction: 'delete',
+  };
+}
+
+export function egressProposal(domain: string): ActionProposal {
+  return {
+    principal: agentId,
+    identitySource: 'native',
+    tool: 'http_fetch',
+    args: { domain },
+    resource: { kind: 'egress', id: domain },
+    declaredAction: 'egress',
+  };
+}
+
 /**
  * Two distinct proposals for the receipt-chain tests (Suite C). Both deny
  * (unmapped tools) so the tamper test - which flips the decision to 'allow' -
