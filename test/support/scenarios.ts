@@ -36,3 +36,9 @@ export function expectedDecision(p: ActionProposal): Effect {
   if (p.declaredAction === 'egress' && p.args.domain === ALLOWLISTED_DOMAIN) return 'allow';
   return 'deny';
 }
+
+/**
+ * A reconciliation window start before any recorded traffic (Suite F). The
+ * recorded entries are dated 2026-06-10, so this includes all of them.
+ */
+export const t0 = '2026-06-01T00:00:00.000Z';

@@ -47,7 +47,8 @@ export {
   p1,
   p2,
 } from './proposals';
-export { sharedScenarioSet, expectedDecision } from './scenarios';
+export { sharedScenarioSet, expectedDecision, t0 } from './scenarios';
+export { arbitrationSources } from './arbitrationSources';
 export { hash, jcs, sampleA, reorderKeys } from './receiptHelpers';
 export { createOtelHarness } from './otel';
 export type { OtelHarness, RecordedEvent } from './otel';

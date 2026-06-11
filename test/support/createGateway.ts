@@ -28,6 +28,7 @@ import { stubMcpServer, type StubMcpServer } from './stubMcpServer';
 import type { McpProxyClient } from '../../src/mcp/proxy';
 import type { OpenApiDoc } from './committedSpec';
 import { defaultBundleFor, loadRecordedTraffic } from './bundles';
+import { arbitrationSources } from './arbitrationSources';
 import { agentId } from '../../fixtures/principals';
 
 export interface CreateGatewayOptions {
@@ -147,11 +148,12 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     identity: { principal: agentId },
     tracer: opts.tracer as Tracer | undefined,
     recordedTraffic: loadRecordedTraffic(),
+    sources: arbitrationSources,
   });
 
   const client: GatewayClient = {
-    async decide(proposal) {
-      return core.decide(proposal);
+    async decide(proposal, arbitration) {
+      return core.decide(proposal, arbitration);
     },
     async rawDecide() {
       return NOT_WIRED('rawDecide');
@@ -177,11 +179,11 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     async simulatePolicy(req) {
       return core.simulatePolicy(req.change);
     },
-    async reconcile() {
-      return NOT_WIRED('reconcile');
+    async reconcile(req) {
+      return core.reconcile(req);
     },
     async conflicts() {
-      return NOT_WIRED('conflicts');
+      return core.conflicts();
     },
     async escalations() {
       return core.escalations();
