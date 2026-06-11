@@ -28,4 +28,7 @@ export type { OpenApiDoc } from './committedSpec';
 export { stubModel } from './stubModel';
 export type { StubModel } from './stubModel';
 
+export { defaultCedarBundle, emptyBundle } from './bundles';
+export { proposal, readFileProposal, writeFileProposal } from './proposals';
+
 export { principals } from '../../fixtures/principals';

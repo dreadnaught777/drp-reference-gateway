@@ -5,10 +5,11 @@
  *
  * Default-deny is not configurable: booting with { defaultEffect: 'allow' } or
  * any equivalent default-allow option MUST throw (CLAUDE.md engineering rules;
- * Suite A). That guard is live from M0.
+ * Suite A).
  *
- * M0 scaffold: the option guard and the handle shape are real; the client
- * methods are wired to the decide pipeline from M1 onward and throw until then.
+ * M1: the client is wired to the real decide pipeline (decide, escalation
+ * resolution, receipts). Readback, simulate, reconcile and arbitration land at
+ * their gating milestones and throw until then.
  */
 
 import type {
@@ -16,13 +17,17 @@ import type {
   ArbitrationRequest,
   Decision,
   PolicyBundle,
+  SignedReceipt,
 } from '../../src/types';
-import type { SignedReceipt } from '../../src/types';
 import type { PolicySimChange, PolicySimResult } from '../../src/simulate/policy';
 import type { ReconcileFlag } from '../../src/reconcile/drift';
+import { createGatewayCore } from '../../src/gateway';
+import type { Downstream } from '../../src/mcp/downstream';
 import { stubMcpServer, type StubMcpServer } from './stubMcpServer';
-import { createMcpProxy, type McpProxyClient } from '../../src/mcp/proxy';
+import type { McpProxyClient } from '../../src/mcp/proxy';
 import type { OpenApiDoc } from './committedSpec';
+import { defaultCedarBundle } from './bundles';
+import { agentId } from '../../fixtures/principals';
 
 export interface CreateGatewayOptions {
   provider: 'cedar' | 'opa';
@@ -109,8 +114,16 @@ function requestsDefaultAllow(opts: CreateGatewayOptions): boolean {
 }
 
 const NOT_WIRED = (iface: string): never => {
-  throw new Error(`${iface} not wired until M1 (decide pipeline)`);
+  throw new Error(`${iface} not wired until its gating milestone`);
 };
+
+function toDownstream(server: StubMcpServer): Downstream {
+  return {
+    name: server.name,
+    handles: (tool: string) => server.tools.includes(tool),
+    call: (tool: string, args: Record<string, unknown>) => server.call(tool, args),
+  };
+}
 
 export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
   if (!opts || (opts.provider !== 'cedar' && opts.provider !== 'opa')) {
@@ -122,11 +135,18 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
 
   const files = stubMcpServer('files');
   const egress = stubMcpServer('egress');
-  const proxy = createMcpProxy();
+  const bundle = opts.policy ?? defaultCedarBundle();
+
+  const core = createGatewayCore({
+    provider: opts.provider,
+    policy: bundle,
+    downstreams: [toDownstream(files), toDownstream(egress)],
+    identity: { principal: agentId },
+  });
 
   const client: GatewayClient = {
-    async decide() {
-      return NOT_WIRED('decide');
+    async decide(proposal) {
+      return core.decide(proposal);
     },
     async rawDecide() {
       return NOT_WIRED('rawDecide');
@@ -159,16 +179,16 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
       return NOT_WIRED('conflicts');
     },
     async escalations() {
-      return NOT_WIRED('escalations');
+      return core.escalations();
     },
-    async resolveEscalation() {
-      return NOT_WIRED('escalations/{id}');
+    async resolveEscalation(decisionId, resolution) {
+      return core.resolveEscalation(decisionId, resolution);
     },
-    async receipt() {
-      return NOT_WIRED('receipts/{ref}');
+    async receipt(ref) {
+      return core.receipt(ref);
     },
     async keys() {
-      return NOT_WIRED('keys');
+      return core.keys();
     },
     async openapi() {
       return NOT_WIRED('openapi.json');
@@ -183,7 +203,7 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     client,
     files,
     egress,
-    proxy,
+    proxy: core.proxy,
     async close() {
       files.reset();
       egress.reset();
