@@ -9,9 +9,11 @@
  * default to allow (CLAUDE.md engineering rules; semantics section 2).
  */
 
+import type { Tracer } from '@opentelemetry/api';
 import type {
   ActionProposal,
   Decision,
+  Effect,
   PolicyBundle,
   SignedReceipt,
 } from './types';
@@ -32,6 +34,8 @@ export interface GatewayConfig {
   identity?: { principal: string; identitySource?: 'native' | 'delegated' };
   /** Injectable clock for deterministic receipts in tests. */
   now?: () => string;
+  /** OpenTelemetry tracer; decisions emit the drp.decision event through it. */
+  tracer?: Tracer;
 }
 
 export interface EscalationResolution {
@@ -39,9 +43,31 @@ export interface EscalationResolution {
   resolvedBy: string;
 }
 
+export interface AssumedState {
+  decisionId: string;
+  receiptRef: string;
+  assumed: SignedReceipt['assumed'];
+}
+
+export interface EffectiveRule {
+  id: string;
+  effect: Effect;
+  summary: string;
+}
+
+export interface EffectivePolicy {
+  principal: string;
+  version: string;
+  vocabulary: string;
+  rules: EffectiveRule[];
+}
+
 export interface Gateway {
   decide(proposal: ActionProposal): Promise<Decision>;
   decideAndEnact(proposal: ActionProposal): Promise<EnactedDecision>;
+  decideAndFetchReceipt(
+    proposal: ActionProposal,
+  ): Promise<{ decision: Decision; receipt: SignedReceipt }>;
   resolveEscalation(
     decisionId: string,
     resolution: EscalationResolution,
@@ -49,12 +75,26 @@ export interface Gateway {
   receipt(receiptRef: string): { receipt: SignedReceipt };
   escalations(): { escalations: HeldEscalation[] };
   keys(): { keys: PublishedKey[] };
+  decisions(filter: { principal?: string; since?: string; decision?: string }): Decision[];
+  state(decisionId: string): AssumedState;
+  effectivePolicy(principal: string): EffectivePolicy;
+  loadPolicy(bundle: PolicyBundle): Promise<{ version: string }>;
+  readonly publicKey: string;
   proxy: McpProxyClient;
   store: DecisionStore;
 }
 
 function makeProvider(name: 'cedar' | 'opa'): DrpProvider {
   return name === 'cedar' ? new CedarProvider() : new OpaProvider();
+}
+
+/** Match a SPIFFE principal against a manifest principal pattern ("*" globs). */
+function principalMatches(pattern: string, principal: string): boolean {
+  if (pattern === '*') return true;
+  const rx = new RegExp(
+    '^' + pattern.replace(/[.*+?^${}()|[\]\\]/g, (c) => (c === '*' ? '.*' : `\\${c}`)) + '$',
+  );
+  return rx.test(principal);
 }
 
 export function createGatewayCore(config: GatewayConfig): Gateway {
@@ -65,26 +105,28 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
   const now = config.now ?? (() => new Date().toISOString());
   const identity = config.identity ?? { principal: 'spiffe://demo/agent/email-helper' };
 
-  // Load once; the decide path awaits the loaded policy (cedar load is sync
-  // work wrapped in a promise, so the gateway constructs synchronously).
+  // The active bundle is mutable: /policy load replaces it and the effective
+  // version moves on. Readback still answers history, because each receipt
+  // pins the version it was evaluated under (semantics section 3).
+  let activeBundle = config.policy;
   let loaded: Promise<LoadedPolicy> | undefined;
   const loadedPolicy = (): Promise<LoadedPolicy> => {
-    if (!loaded) loaded = provider.load(config.policy);
+    if (!loaded) loaded = provider.load(activeBundle);
     return loaded;
   };
 
   const deps = {
     provider,
     loadedPolicy,
-    policyVersion: () => config.policy.bundleVersion,
+    policyVersion: () => activeBundle.bundleVersion,
     store,
     signer,
     downstreams,
     now,
+    tracer: config.tracer,
   };
 
   const decideAndEnact = (proposal: ActionProposal) => runDecide(deps, proposal);
-
   const proxy = createMcpProxy({ identity, decideAndEnact });
 
   return {
@@ -93,6 +135,12 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
       return decision;
     },
     decideAndEnact,
+    async decideAndFetchReceipt(proposal) {
+      const { decision } = await decideAndEnact(proposal);
+      const receipt = store.getReceipt(decision.receiptRef);
+      if (!receipt) throw new Error(`no receipt ${decision.receiptRef}`);
+      return { decision, receipt };
+    },
     async resolveEscalation(decisionId, { resolution, resolvedBy }) {
       const held = store.getEscalation(decisionId);
       if (!held || held.status !== 'pending') {
@@ -119,9 +167,9 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
         decision: (approved ? 'allow' : 'deny') as 'allow' | 'deny',
         reason: `escalation ${resolution} by ${resolvedBy}`,
         provider: provider.name,
-        policyVersion: config.policy.bundleVersion,
+        policyVersion: activeBundle.bundleVersion,
         assumed: {
-          policyVersion: config.policy.bundleVersion,
+          policyVersion: activeBundle.bundleVersion,
           principal: resolvedBy,
           priorContext: null,
         },
@@ -146,6 +194,42 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
     },
     keys() {
       return { keys: [signer.published()] };
+    },
+    decisions(filter) {
+      // Newest first, per the spec's /decisions ordering.
+      return store.listDecisions(filter).reverse();
+    },
+    state(decisionId) {
+      const decision = store.getDecision(decisionId);
+      if (!decision) throw new Error(`no decision ${decisionId}`);
+      const receipt = store.getReceipt(decision.receiptRef);
+      if (!receipt) throw new Error(`no receipt for decision ${decisionId}`);
+      return { decisionId, receiptRef: decision.receiptRef, assumed: receipt.assumed };
+    },
+    effectivePolicy(principal) {
+      // Served from the bundle manifest, not engine introspection: this keeps
+      // readback engine-agnostic (build brief, Interface 2 note).
+      const rules = (activeBundle.rules ?? [])
+        .filter((r) => (r.principals ?? ['*']).some((p) => principalMatches(p, principal)))
+        .map((r) => ({ id: r.id, effect: r.effect, summary: r.summary }));
+      return {
+        principal,
+        version: activeBundle.bundleVersion,
+        vocabulary: activeBundle.vocabulary,
+        rules,
+      };
+    },
+    async loadPolicy(bundle) {
+      // Validate by loading first; a bad bundle must not replace the active one
+      // (Suite E). Only swap once the new bundle has loaded successfully.
+      const next = provider.load(bundle);
+      await next;
+      activeBundle = bundle;
+      loaded = next;
+      return { version: bundle.bundleVersion };
+    },
+    get publicKey() {
+      return signer.publicKeyPem;
     },
     proxy,
     store,

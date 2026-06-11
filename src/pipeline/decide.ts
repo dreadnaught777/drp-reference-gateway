@@ -14,7 +14,9 @@ import type { ActionProposal, Decision, PrincipalCoverage, ReceiptBody } from '.
 import type { DrpProvider, EngineInput, LoadedPolicy } from '../providers/types';
 import type { DecisionStore } from '../state/store';
 import type { ReceiptSigner } from '../state/receipts';
+import type { Tracer } from '@opentelemetry/api';
 import { routeTool, type Downstream } from '../mcp/downstream';
+import { emitDecisionEvent } from '../otel';
 
 export interface DecidePipelineDeps {
   provider: DrpProvider;
@@ -24,6 +26,7 @@ export interface DecidePipelineDeps {
   signer: ReceiptSigner;
   downstreams: Downstream[];
   now: () => string;
+  tracer?: Tracer;
 }
 
 export interface EnactedDecision {
@@ -124,6 +127,10 @@ export async function decide(
 
   deps.store.putReceipt(deps.signer.sign(body));
   deps.store.putDecision(decision);
+
+  // Every decision emits the drp.decision OTel event (semantics: the record of
+  // what was decided). Suite C asserts it reaches the configured exporter.
+  emitDecisionEvent(deps.tracer, decision);
 
   let downstreamResult: unknown;
   if (!simulated) {
