@@ -40,3 +40,16 @@ export function writeFileProposal(path: string): ActionProposal {
     declaredAction: 'write',
   };
 }
+
+/**
+ * Two distinct proposals for the receipt-chain tests (Suite C). Both deny
+ * (unmapped tools) so the tamper test - which flips the decision to 'allow' -
+ * genuinely changes the signed body.
+ */
+export function p1(): ActionProposal {
+  return proposal({ tool: 'exotic_tool', args: { seq: 1 } });
+}
+
+export function p2(): ActionProposal {
+  return proposal({ tool: 'another_unknown', args: { seq: 2 } });
+}

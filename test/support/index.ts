@@ -28,7 +28,10 @@ export type { OpenApiDoc } from './committedSpec';
 export { stubModel } from './stubModel';
 export type { StubModel } from './stubModel';
 
-export { defaultCedarBundle, emptyBundle } from './bundles';
-export { proposal, readFileProposal, writeFileProposal } from './proposals';
+export { defaultCedarBundle, emptyBundle, stricterPolicy } from './bundles';
+export { proposal, readFileProposal, writeFileProposal, p1, p2 } from './proposals';
+export { hash, jcs, sampleA, reorderKeys } from './receiptHelpers';
+export { createOtelHarness } from './otel';
+export type { OtelHarness, RecordedEvent } from './otel';
 
 export { principals } from '../../fixtures/principals';

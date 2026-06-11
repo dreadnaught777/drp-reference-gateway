@@ -14,5 +14,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "test", "fixtures", "vitest.config.ts"]
+  "include": ["src", "test", "fixtures", "vitest.config.ts"],
+  "comment": "Suite files are transcribed verbatim from the test plan and run via Vitest (esbuild transpile). They are excluded from tsc because the plan's illustrative code is not written to strict null-checks; the harness under test/support and all of src ARE type-checked.",
+  "exclude": ["node_modules", "test/**/*.test.ts"]
 }

@@ -37,3 +37,34 @@ export const emptyBundle: PolicyBundle = {
   source: '',
   rules: [],
 };
+
+/**
+ * A different, valid bundle for the readback tests (Suite D): it loads cleanly
+ * and carries a distinct bundleVersion, so reloading it moves the effective
+ * version on. Tighter than the default - only the sandbox read rule remains.
+ */
+const stricterSource = [
+  '@id("sandbox-read-allow")',
+  'permit (',
+  '  principal,',
+  '  action == Action::"read",',
+  '  resource',
+  ')',
+  'when { resource.path like "sandbox/*" };',
+  '',
+].join('\n');
+
+export const stricterPolicy: PolicyBundle = {
+  bundleVersion: bundleVersionOf(stricterSource),
+  vocabulary: 'drp-demo-v1',
+  engine: 'cedar',
+  source: stricterSource,
+  rules: [
+    {
+      id: 'sandbox-read-allow',
+      principals: ['spiffe://demo/agent/*'],
+      effect: 'allow',
+      summary: 'read-path in sandbox',
+    },
+  ],
+};

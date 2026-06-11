@@ -21,6 +21,7 @@ import type {
 } from '../../src/types';
 import type { PolicySimChange, PolicySimResult } from '../../src/simulate/policy';
 import type { ReconcileFlag } from '../../src/reconcile/drift';
+import type { Tracer } from '@opentelemetry/api';
 import { createGatewayCore } from '../../src/gateway';
 import type { Downstream } from '../../src/mcp/downstream';
 import { stubMcpServer, type StubMcpServer } from './stubMcpServer';
@@ -101,6 +102,8 @@ export interface GatewayHandle extends GatewayClient {
   files: StubMcpServer;
   egress: StubMcpServer;
   proxy: McpProxyClient;
+  /** The gateway's published Ed25519 public key (PEM), for offline verify. */
+  publicKey: string;
   close(): Promise<void>;
 }
 
@@ -142,6 +145,7 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     policy: bundle,
     downstreams: [toDownstream(files), toDownstream(egress)],
     identity: { principal: agentId },
+    tracer: opts.tracer as Tracer | undefined,
   });
 
   const client: GatewayClient = {
@@ -151,20 +155,20 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     async rawDecide() {
       return NOT_WIRED('rawDecide');
     },
-    async decideAndFetchReceipt() {
-      return NOT_WIRED('decideAndFetchReceipt');
+    async decideAndFetchReceipt(proposal) {
+      return core.decideAndFetchReceipt(proposal);
     },
-    async decisions() {
-      return NOT_WIRED('decisions');
+    async decisions(filter) {
+      return core.decisions(filter);
     },
-    async state() {
-      return NOT_WIRED('state');
+    async state(decisionId) {
+      return core.state(decisionId);
     },
-    async effectivePolicy() {
-      return NOT_WIRED('policy/effective');
+    async effectivePolicy(principal) {
+      return core.effectivePolicy(principal);
     },
-    async loadPolicy() {
-      return NOT_WIRED('policy');
+    async loadPolicy(b) {
+      return core.loadPolicy(b);
     },
     async simulateAction() {
       return NOT_WIRED('simulate/action');
@@ -204,6 +208,7 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     files,
     egress,
     proxy: core.proxy,
+    publicKey: core.publicKey,
     async close() {
       files.reset();
       egress.reset();
