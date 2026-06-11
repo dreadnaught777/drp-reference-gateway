@@ -1,0 +1,24 @@
+{
+  "name": "drp-reference-gateway",
+  "version": "0.1.0",
+  "description": "Reference implementation of Declarative Runtime Policy (DRP): an MCP-proxying policy gateway",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:rego": "bash scripts/build-rego.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "canonicalize": "^2.0.0",
+    "yaml": "^2.6.0"
+  }
+}

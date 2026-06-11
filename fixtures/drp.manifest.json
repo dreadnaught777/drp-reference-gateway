@@ -1,0 +1,25 @@
+{
+  "bundleVersion": "sha256:placeholder-recomputed-on-load",
+  "vocabulary": "drp-demo-v1",
+  "engine": "cedar",
+  "rules": [
+    {
+      "id": "sandbox-read-allow",
+      "principals": ["spiffe://demo/agent/*"],
+      "effect": "allow",
+      "summary": "read-path in sandbox"
+    },
+    {
+      "id": "write-escalate",
+      "principals": ["*"],
+      "effect": "escalate",
+      "summary": "write/delete escalates"
+    },
+    {
+      "id": "egress-allowlist",
+      "principals": ["*"],
+      "effect": "allow",
+      "summary": "one permitted egress domain, capability-bound"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+node_modules/
+*.log
+.DS_Store
+coverage/
+*.sqlite
+*.sqlite-journal
+*.db
+dist/
+.vitest/
