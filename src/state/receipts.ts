@@ -12,6 +12,7 @@ import {
   createHash,
   generateKeyPairSync,
   sign as cryptoSign,
+  verify as cryptoVerify,
   createPublicKey,
   type KeyObject,
 } from 'node:crypto';
@@ -51,6 +52,20 @@ export class ReceiptSigner {
 
   published(): PublishedKey {
     return { keyId: this.keyId, alg: 'Ed25519', publicKey: this.#publicKeyPem };
+  }
+
+  /** Sign an arbitrary message with the same Ed25519 key (context tokens). */
+  signDetached(message: Buffer): Buffer {
+    return cryptoSign(null, message, this.#privateKey);
+  }
+
+  /** Verify a detached signature over a message against the public key. */
+  verifyDetached(message: Buffer, sig: Buffer): boolean {
+    try {
+      return cryptoVerify(null, message, this.publicKey, sig);
+    } catch {
+      return false;
+    }
   }
 
   /** Sign a receipt body, returning the body with detached { sig, keyId }. */

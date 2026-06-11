@@ -14,6 +14,7 @@ import type {
   ActionProposal,
   ArbitrationRequest,
   Decision,
+  PriorContext,
   PrincipalCoverage,
   ReceiptBody,
 } from '../types';
@@ -24,6 +25,7 @@ import type { Tracer } from '@opentelemetry/api';
 import { routeTool, type Downstream } from '../mcp/downstream';
 import { emitDecisionEvent } from '../otel';
 import { arbitrate, type SourceDecision } from '../arbitrate/resolvers';
+import { signContextToken, verifyContextToken } from '../context/token';
 
 /**
  * The decide path consults named sources only through this context, which the
@@ -65,6 +67,14 @@ export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replace(/-/g, '')}`;
 }
 
+/** A fresh W3C traceparent, used when a proposal carries none, so chained
+ * decisions can be correlated (Suite I; build brief, Interface 3). */
+function generateTraceparent(): string {
+  const traceId = randomUUID().replace(/-/g, '');
+  const spanId = randomUUID().replace(/-/g, '').slice(0, 16);
+  return `00-${traceId}-${spanId}-01`;
+}
+
 /** Assemble the engine input from a proposal. Shared by the decide path and
  * policy simulation so both evaluate proposals identically. */
 export function engineInputFrom(proposal: ActionProposal): EngineInput {
@@ -103,16 +113,48 @@ export async function decide(
   const simulated = opts.simulated ?? false;
   const policyVersion = deps.policyVersion();
 
-  const input = engineInputFrom(proposal);
   const decisionId = newId('d');
   const receiptId = newId('r');
   const ts = deps.now();
+
+  // Verify any carried prior context BEFORE evaluation. A valid token is
+  // admitted to policy input; an invalid or tampered one is EXCLUDED (dropped
+  // from input) and reported as contextTrusted: false - it does not by itself
+  // deny (semantics section 5).
+  const incoming = proposal.context?.priorContext;
+  let priorContext: PriorContext | null = null;
+  let sawPriorContext = false;
+  let contextTrusted: boolean | null = null;
+  if (incoming) {
+    const verified = verifyContextToken(deps.signer, incoming);
+    if (verified) {
+      priorContext = verified;
+      sawPriorContext = true;
+      contextTrusted = true;
+    } else {
+      contextTrusted = false;
+    }
+  }
+
+  const input: EngineInput = { ...engineInputFrom(proposal), priorContext };
 
   // Produce the engine decision - by single-source evaluation, or, when the
   // request names sources, by arbitrating across them (layer-side resolver).
   const { eng, arbitration } = await renderEngineDecision(deps, input, opts.arbitration, {
     decisionId,
     ts,
+  });
+
+  const traceparent = proposal.context?.traceparent ?? generateTraceparent();
+
+  // Mint this decision's carriage token so a downstream hop can carry it.
+  const contextToken = signContextToken(deps.signer, {
+    decisionId,
+    principal: proposal.principal,
+    action: proposal.declaredAction,
+    decision: eng.effect,
+    policyVersion,
+    iat: Math.floor(Date.parse(ts) / 1000),
   });
 
   const decision: Decision = {
@@ -122,13 +164,14 @@ export async function decide(
     receiptRef: receiptId,
     provider: deps.provider.name,
     principal: proposal.principal,
-    identitySource: proposal.identitySource ?? 'native',
+    // A delegated identity (OIDC -> SPIFFE) reports identitySource "delegated".
+    identitySource: proposal.delegatedFrom ? 'delegated' : (proposal.identitySource ?? 'native'),
     principalCoverage: principalCoverage(proposal.principal),
     policyVersion,
-    contextToken: '', // carriage half (Interface 3) arrives at M6
-    traceparent: proposal.context?.traceparent ?? null,
-    sawPriorContext: false,
-    contextTrusted: null,
+    contextToken,
+    traceparent,
+    sawPriorContext,
+    contextTrusted,
     gatedOn: 'declared-action',
     limitations: [],
     arbitration,
@@ -149,7 +192,7 @@ export async function decide(
     reason: eng.reason,
     provider: deps.provider.name,
     policyVersion,
-    assumed: { policyVersion, principal: proposal.principal, priorContext: null },
+    assumed: { policyVersion, principal: proposal.principal, priorContext },
     simulated,
     prevHash: deps.store.lastReceiptHash(),
   };

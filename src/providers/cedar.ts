@@ -22,6 +22,8 @@ interface CedarLoadedPolicy extends LoadedPolicy {
   byId: Record<string, string>;
   /** Manifest-declared effect for each rule id (allow/deny/escalate). */
   effectById: Record<string, Effect>;
+  /** Manifest summary for each rule id, used as the decision reason. */
+  summaryById: Record<string, string>;
 }
 
 /** Split a Cedar bundle into individual policy texts keyed by their @id. */
@@ -103,8 +105,10 @@ export class CedarProvider implements DrpProvider {
     assertNoContradiction(byId);
 
     const effectById: Record<string, Effect> = {};
+    const summaryById: Record<string, string> = {};
     for (const rule of bundle.rules ?? []) {
       effectById[rule.id] = rule.effect;
+      if (rule.summary) summaryById[rule.id] = rule.summary;
     }
 
     const loaded: CedarLoadedPolicy = {
@@ -112,6 +116,7 @@ export class CedarProvider implements DrpProvider {
       vocabulary: bundle.vocabulary,
       byId,
       effectById,
+      summaryById,
     };
     return loaded;
   }
@@ -122,12 +127,20 @@ export class CedarProvider implements DrpProvider {
     const principalUid = { type: 'Principal', id: input.principal };
 
     const domain = typeof input.args.domain === 'string' ? input.args.domain : '';
+    const payload = input.args.payload;
+
+    // Request-context flags the policy reads. Always supplied so policies that
+    // reference them never error on a missing attribute.
+    const context = {
+      payloadPresent: payload !== undefined && payload !== null && payload !== '',
+      priorRead: input.priorContext != null && input.priorContext.action === 'read',
+    };
 
     const answer = cedar.isAuthorized({
       principal: principalUid,
       action: { type: 'Action', id: input.declaredAction },
       resource: resourceUid,
-      context: {},
+      context,
       policies: { staticPolicies: loaded.byId },
       entities: [
         { uid: principalUid, attrs: {}, parents: [] },
@@ -146,14 +159,13 @@ export class CedarProvider implements DrpProvider {
 
     const { decision, diagnostics } = answer.response;
     const determining = diagnostics.reason[0] ?? null;
+    const summary = determining ? loaded.summaryById[determining] : undefined;
 
     if (decision === 'deny') {
       return {
         effect: 'deny',
         matchedRuleId: determining,
-        reason: determining
-          ? `denied by rule ${determining}`
-          : 'default-deny: no rule matched',
+        reason: summary ?? (determining ? `denied by rule ${determining}` : 'default-deny: no rule matched'),
       };
     }
 
@@ -163,7 +175,7 @@ export class CedarProvider implements DrpProvider {
     return {
       effect,
       matchedRuleId: determining,
-      reason: determining ? `matched rule ${determining}` : 'allow',
+      reason: summary ?? (determining ? `matched rule ${determining}` : 'allow'),
     };
   }
 }

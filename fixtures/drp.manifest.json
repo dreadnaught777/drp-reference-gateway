@@ -10,16 +10,52 @@
       "summary": "read-path in sandbox"
     },
     {
+      "id": "crm-read-allow",
+      "principals": ["*"],
+      "effect": "allow",
+      "summary": "read CRM data"
+    },
+    {
+      "id": "artefact-read-allow",
+      "principals": ["*"],
+      "effect": "allow",
+      "summary": "read an artefact"
+    },
+    {
       "id": "write-escalate",
       "principals": ["*"],
       "effect": "escalate",
       "summary": "write/delete escalates"
     },
     {
+      "id": "artefact-write-allow",
+      "principals": ["*"],
+      "effect": "allow",
+      "summary": "write an artefact"
+    },
+    {
+      "id": "send-escalate",
+      "principals": ["*"],
+      "effect": "escalate",
+      "summary": "remote-contacting send escalates"
+    },
+    {
+      "id": "composite-deny",
+      "principals": ["*"],
+      "effect": "deny",
+      "summary": "cross-principal composite: prior read carried to an external send"
+    },
+    {
       "id": "egress-allowlist",
       "principals": ["*"],
       "effect": "allow",
       "summary": "one permitted egress domain, capability-bound"
+    },
+    {
+      "id": "egress-capability-deny",
+      "principals": ["*"],
+      "effect": "deny",
+      "summary": "egress grant binds to capability, not a destination filter"
     }
   ]
 }
