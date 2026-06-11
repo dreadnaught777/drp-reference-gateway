@@ -23,6 +23,12 @@ import { OpaProvider } from './providers/opa';
 import { createStore, type DecisionStore, type HeldEscalation } from './state/store';
 import { ReceiptSigner, type PublishedKey } from './state/receipts';
 import { decide as runDecide, enact, newId, type EnactedDecision } from './pipeline/decide';
+import { simulateAction as runSimulateAction } from './simulate/action';
+import {
+  simulatePolicyDiff,
+  type PolicySimResult,
+  type RecordedEntry,
+} from './simulate/policy';
 import { createMcpProxy, type McpProxyClient } from './mcp/proxy';
 import type { Downstream } from './mcp/downstream';
 
@@ -36,6 +42,8 @@ export interface GatewayConfig {
   now?: () => string;
   /** OpenTelemetry tracer; decisions emit the drp.decision event through it. */
   tracer?: Tracer;
+  /** Past proposals + decisions that policy simulation (mode b) replays. */
+  recordedTraffic?: RecordedEntry[];
 }
 
 export interface EscalationResolution {
@@ -68,6 +76,8 @@ export interface Gateway {
   decideAndFetchReceipt(
     proposal: ActionProposal,
   ): Promise<{ decision: Decision; receipt: SignedReceipt }>;
+  simulateAction(proposal: ActionProposal): Promise<Decision>;
+  simulatePolicy(candidate: PolicyBundle): Promise<PolicySimResult>;
   resolveEscalation(
     decisionId: string,
     resolution: EscalationResolution,
@@ -104,6 +114,7 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
   const downstreams = config.downstreams;
   const now = config.now ?? (() => new Date().toISOString());
   const identity = config.identity ?? { principal: 'spiffe://demo/agent/email-helper' };
+  const recordedTraffic = config.recordedTraffic ?? [];
 
   // The active bundle is mutable: /policy load replaces it and the effective
   // version moves on. Readback still answers history, because each receipt
@@ -140,6 +151,19 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
       const receipt = store.getReceipt(decision.receiptRef);
       if (!receipt) throw new Error(`no receipt ${decision.receiptRef}`);
       return { decision, receipt };
+    },
+    async simulateAction(proposal) {
+      // Same pipeline, effect suppressed: receipt marked simulated and chained,
+      // no downstream call, nothing queued (semantics section 6).
+      const { decision } = await runSimulateAction(deps, proposal);
+      return decision;
+    },
+    async simulatePolicy(candidate) {
+      // Load the candidate in shadow (this also validates it) and replay the
+      // recorded traffic against it. No side effects, no receipts.
+      const shadowProvider = makeProvider(candidate.engine);
+      const shadowLoaded = await shadowProvider.load(candidate);
+      return simulatePolicyDiff(shadowProvider, shadowLoaded, recordedTraffic);
     },
     async resolveEscalation(decisionId, { resolution, resolvedBy }) {
       const held = store.getEscalation(decisionId);

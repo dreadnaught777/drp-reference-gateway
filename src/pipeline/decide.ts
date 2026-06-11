@@ -45,6 +45,19 @@ export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replace(/-/g, '')}`;
 }
 
+/** Assemble the engine input from a proposal. Shared by the decide path and
+ * policy simulation so both evaluate proposals identically. */
+export function engineInputFrom(proposal: ActionProposal): EngineInput {
+  return {
+    principal: proposal.principal,
+    declaredAction: proposal.declaredAction,
+    tool: proposal.tool,
+    resource: proposal.resource,
+    args: proposal.args,
+    priorContext: null, // trusted context carriage arrives at M6
+  };
+}
+
 /** Forward an allowed (or approved) action to the downstream that handles it. */
 export async function enact(
   downstreams: Downstream[],
@@ -71,15 +84,7 @@ export async function decide(
   const policy = await deps.loadedPolicy();
   const policyVersion = deps.policyVersion();
 
-  const input: EngineInput = {
-    principal: proposal.principal,
-    declaredAction: proposal.declaredAction,
-    tool: proposal.tool,
-    resource: proposal.resource,
-    args: proposal.args,
-    priorContext: null, // trusted context carriage arrives at M6
-  };
-
+  const input = engineInputFrom(proposal);
   const eng = await deps.provider.evaluate(input, policy);
 
   const decisionId = newId('d');

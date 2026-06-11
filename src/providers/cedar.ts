@@ -13,6 +13,7 @@
  */
 
 import * as cedar from '@cedar-policy/cedar-wasm/nodejs';
+import canonicalize from 'canonicalize';
 import type { DrpProvider, EngineInput, EngineDecision, LoadedPolicy } from './types';
 import type { Effect, PolicyBundle } from '../types';
 
@@ -41,6 +42,50 @@ function splitById(source: string): Record<string, string> {
   return byId;
 }
 
+/**
+ * The scope of a policy - principal, action, resource and conditions - with
+ * effect and annotations stripped, canonicalised for comparison. Two policies
+ * with the same scope key target identical requests.
+ */
+function scopeKey(policyText: string): { effect: string; key: string } | null {
+  const ans = cedar.policyToJson(policyText);
+  if (ans.type !== 'success') return null;
+  const json = ans.json as unknown as Record<string, unknown> & { effect?: string };
+  const effect = String(json.effect ?? '');
+  const { effect: _e, annotations: _a, ...scope } = json;
+  void _e;
+  void _a;
+  return { effect, key: canonicalize(scope) ?? '' };
+}
+
+/**
+ * Probe-based contradiction check (build brief R4; semantics section 6). This
+ * is STATIC validation plus a scope comparison - NOT SMT-based automated
+ * reasoning of the kind AWS runs. It rejects a policy set in which a permit and
+ * a forbid share identical scope: the permit can never produce allow, so the
+ * set is unsatisfiable on that scope.
+ */
+function assertNoContradiction(byId: Record<string, string>): void {
+  const permits: { id: string; key: string }[] = [];
+  const forbids: { id: string; key: string }[] = [];
+  for (const [id, text] of Object.entries(byId)) {
+    const sk = scopeKey(text);
+    if (!sk) continue;
+    if (sk.effect === 'permit') permits.push({ id, key: sk.key });
+    else if (sk.effect === 'forbid') forbids.push({ id, key: sk.key });
+  }
+  for (const p of permits) {
+    for (const f of forbids) {
+      if (p.key === f.key) {
+        throw new Error(
+          `cedar: policy set is unsatisfiable - permit ${p.id} and forbid ${f.id} ` +
+            `share identical scope (contradiction); the permit can never allow`,
+        );
+      }
+    }
+  }
+}
+
 export class CedarProvider implements DrpProvider {
   readonly name = 'cedar' as const;
 
@@ -53,6 +98,9 @@ export class CedarProvider implements DrpProvider {
       const detail = check.errors.map((e) => e.message).join('; ');
       throw new Error(`cedar: invalid policy bundle - ${detail}`);
     }
+
+    // Reject self-contradictory bundles before they can enforce (R4).
+    assertNoContradiction(byId);
 
     const effectById: Record<string, Effect> = {};
     for (const rule of bundle.rules ?? []) {
