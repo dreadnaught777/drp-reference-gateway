@@ -155,8 +155,8 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
     async decide(proposal, arbitration) {
       return core.decide(proposal, arbitration);
     },
-    async rawDecide() {
-      return NOT_WIRED('rawDecide');
+    async rawDecide(proposal) {
+      return core.rawDecide(proposal);
     },
     async decideAndFetchReceipt(proposal) {
       return core.decideAndFetchReceipt(proposal);
@@ -198,10 +198,10 @@ export function createGateway(opts: CreateGatewayOptions): GatewayHandle {
       return core.keys();
     },
     async openapi() {
-      return NOT_WIRED('openapi.json');
+      return core.openapi() as unknown as OpenApiDoc;
     },
-    async rawStatus() {
-      return NOT_WIRED('rawStatus');
+    async rawStatus(path) {
+      return core.rawStatus(path);
     },
   };
 

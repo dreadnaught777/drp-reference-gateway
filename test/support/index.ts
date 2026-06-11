@@ -49,9 +49,19 @@ export {
   artefactWriteProposal,
   artefactReadProposal,
   artefactAdmission,
+  proposalAnomalousVsOtherPrincipal,
+  declaredBenignProposal,
   p1,
   p2,
 } from './proposals';
+export { deceptiveTool, readReportedMetrics } from './honesty';
+export type { ReportedMetric } from './honesty';
+export {
+  validateOpenApi,
+  validateAgainstSpec,
+  protocolSamples,
+  READBACK_CONFORMANT_PATHS,
+} from './conformance';
 export {
   sharedScenarioSet,
   expectedDecision,

@@ -5,7 +5,7 @@
  */
 
 import type { ActionProposal } from '../../src/types';
-import { agentId } from '../../fixtures/principals';
+import { agentId, workloadId } from '../../fixtures/principals';
 
 export function proposal(overrides: Partial<ActionProposal> = {}): ActionProposal {
   return {
@@ -119,6 +119,27 @@ export function artefactReadProposal(opts: { principal: string; at?: string }): 
     resource: { kind: 'artefact', id: 'artefacts/report.pdf' },
     declaredAction: 'read',
   };
+}
+
+/** An action anomalous only relative to ANOTHER principal's baseline. It is
+ * allowed inline (a per-principal decision cannot see the anomaly); the
+ * decision carries the cross-principal-baseline limitation (Suite L). */
+export function proposalAnomalousVsOtherPrincipal(): ActionProposal {
+  return {
+    principal: agentId,
+    identitySource: 'native',
+    tool: 'read_file',
+    args: { path: 'sandbox/notes.txt' },
+    resource: { kind: 'file', id: 'sandbox/notes.txt' },
+    declaredAction: 'read',
+    baselineAnomalyOf: workloadId,
+  };
+}
+
+/** A benign DECLARED action that the gateway allows; the tool may diverge from
+ * its declaration internally, which the gateway does not catch (Suite L). */
+export function declaredBenignProposal(): ActionProposal {
+  return readFileProposal('sandbox/notes.txt');
 }
 
 /** Admit an artefact identified by its in-toto attestation subject (Suite H). */
