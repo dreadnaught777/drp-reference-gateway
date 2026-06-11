@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build:rego": "bash scripts/build-rego.sh",
-    "serve:gateway": "tsx scripts/claude-code-hook/serve.ts"
+    "serve:gateway": "tsx scripts/claude-code-hook/serve.ts",
+    "demo": "tsx scripts/demo.ts",
+    "checks": "tsx scripts/prod-checks.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
