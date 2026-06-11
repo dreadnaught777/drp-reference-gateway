@@ -12,23 +12,37 @@
 import type { Tracer } from '@opentelemetry/api';
 import type {
   ActionProposal,
+  ArbitrationRequest,
   Decision,
   Effect,
   PolicyBundle,
   SignedReceipt,
 } from './types';
-import type { DrpProvider, LoadedPolicy } from './providers/types';
+import type { DrpProvider, EngineInput, LoadedPolicy } from './providers/types';
 import { CedarProvider } from './providers/cedar';
 import { OpaProvider } from './providers/opa';
-import { createStore, type DecisionStore, type HeldEscalation } from './state/store';
+import {
+  createStore,
+  type ConflictRecord,
+  type DecisionStore,
+  type HeldEscalation,
+} from './state/store';
 import { ReceiptSigner, type PublishedKey } from './state/receipts';
-import { decide as runDecide, enact, newId, type EnactedDecision } from './pipeline/decide';
+import {
+  decide as runDecide,
+  enact,
+  newId,
+  type ArbitrationContext,
+  type EnactedDecision,
+} from './pipeline/decide';
 import { simulateAction as runSimulateAction } from './simulate/action';
 import {
   simulatePolicyDiff,
   type PolicySimResult,
   type RecordedEntry,
 } from './simulate/policy';
+import { findDrift, type ReconcileFlag } from './reconcile/drift';
+import { findProvenanceLaundering } from './reconcile/patterns';
 import { createMcpProxy, type McpProxyClient } from './mcp/proxy';
 import type { Downstream } from './mcp/downstream';
 
@@ -42,8 +56,17 @@ export interface GatewayConfig {
   now?: () => string;
   /** OpenTelemetry tracer; decisions emit the drp.decision event through it. */
   tracer?: Tracer;
-  /** Past proposals + decisions that policy simulation (mode b) replays. */
+  /** Past proposals + decisions that policy simulation (mode b) replays, and
+   * that seed reconciliation's decision history. */
   recordedTraffic?: RecordedEntry[];
+  /** Named policy sources for arbitration (build brief R6). Each carries its
+   * own vocabulary; mixing vocabularies in one decide request is rejected. */
+  sources?: Record<string, PolicyBundle>;
+}
+
+export interface ReconcileReport {
+  flags: ReconcileFlag[];
+  actionsTaken: never[];
 }
 
 export interface EscalationResolution {
@@ -71,13 +94,18 @@ export interface EffectivePolicy {
 }
 
 export interface Gateway {
-  decide(proposal: ActionProposal): Promise<Decision>;
-  decideAndEnact(proposal: ActionProposal): Promise<EnactedDecision>;
+  decide(proposal: ActionProposal, arbitration?: ArbitrationRequest): Promise<Decision>;
+  decideAndEnact(
+    proposal: ActionProposal,
+    arbitration?: ArbitrationRequest,
+  ): Promise<EnactedDecision>;
   decideAndFetchReceipt(
     proposal: ActionProposal,
   ): Promise<{ decision: Decision; receipt: SignedReceipt }>;
   simulateAction(proposal: ActionProposal): Promise<Decision>;
   simulatePolicy(candidate: PolicyBundle): Promise<PolicySimResult>;
+  reconcile(req: { since: string }): Promise<ReconcileReport>;
+  conflicts(): ConflictRecord[];
   resolveEscalation(
     decisionId: string,
     resolution: EscalationResolution,
@@ -114,7 +142,18 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
   const downstreams = config.downstreams;
   const now = config.now ?? (() => new Date().toISOString());
   const identity = config.identity ?? { principal: 'spiffe://demo/agent/email-helper' };
-  const recordedTraffic = config.recordedTraffic ?? [];
+  const sourceRegistry = config.sources ?? {};
+
+  // Seed reconciliation's decision history from recorded traffic (the fixture
+  // seeds tests; in deployment the live store is the history).
+  for (const entry of config.recordedTraffic ?? []) {
+    store.recordHistory({
+      decisionId: entry.decisionId,
+      proposal: entry.proposal,
+      decision: entry.decision,
+      ts: entry.ts,
+    });
+  }
 
   // The active bundle is mutable: /policy load replaces it and the effective
   // version moves on. Readback still answers history, because each receipt
@@ -126,6 +165,36 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
     return loaded;
   };
 
+  // Named policy sources for arbitration, loaded lazily and cached.
+  const loadedSources = new Map<string, Promise<{ provider: DrpProvider; loaded: LoadedPolicy }>>();
+  const loadSource = (name: string): Promise<{ provider: DrpProvider; loaded: LoadedPolicy }> => {
+    if (!loadedSources.has(name)) {
+      const bundle = sourceRegistry[name];
+      if (!bundle) throw new Error(`unknown policy source ${name}`);
+      const p = makeProvider(bundle.engine);
+      loadedSources.set(name, p.load(bundle).then((l) => ({ provider: p, loaded: l })));
+    }
+    return loadedSources.get(name)!;
+  };
+
+  const arbitrationContext: ArbitrationContext | undefined =
+    Object.keys(sourceRegistry).length > 0
+      ? {
+          vocabularyOf(name) {
+            const bundle = sourceRegistry[name];
+            if (!bundle) throw new Error(`unknown policy source ${name}`);
+            return bundle.vocabulary;
+          },
+          async evaluate(name, input: EngineInput) {
+            const src = await loadSource(name);
+            return src.provider.evaluate(input, src.loaded);
+          },
+          recordConflict(record) {
+            store.recordConflict(record);
+          },
+        }
+      : undefined;
+
   const deps = {
     provider,
     loadedPolicy,
@@ -135,14 +204,16 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
     downstreams,
     now,
     tracer: config.tracer,
+    arbitration: arbitrationContext,
   };
 
-  const decideAndEnact = (proposal: ActionProposal) => runDecide(deps, proposal);
+  const decideAndEnact = (proposal: ActionProposal, arbitration?: ArbitrationRequest) =>
+    runDecide(deps, proposal, { arbitration });
   const proxy = createMcpProxy({ identity, decideAndEnact });
 
   return {
-    async decide(proposal) {
-      const { decision } = await decideAndEnact(proposal);
+    async decide(proposal, arbitration) {
+      const { decision } = await decideAndEnact(proposal, arbitration);
       return decision;
     },
     decideAndEnact,
@@ -160,10 +231,28 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
     },
     async simulatePolicy(candidate) {
       // Load the candidate in shadow (this also validates it) and replay the
-      // recorded traffic against it. No side effects, no receipts.
+      // recorded decision history against it. No side effects, no receipts.
       const shadowProvider = makeProvider(candidate.engine);
       const shadowLoaded = await shadowProvider.load(candidate);
-      return simulatePolicyDiff(shadowProvider, shadowLoaded, recordedTraffic);
+      const recorded = store.listHistory().map((h) => ({
+        proposal: h.proposal,
+        decision: h.decision,
+        decisionId: h.decisionId,
+        ts: h.ts,
+      }));
+      return simulatePolicyDiff(shadowProvider, shadowLoaded, recorded);
+    },
+    async reconcile({ since }) {
+      // Replay stored decisions against current policy. Observation only:
+      // actionsTaken is always empty and there is no revert path (Suite F).
+      const policy = await loadedPolicy();
+      const history = store.listHistory().filter((h) => h.ts >= since);
+      const driftFlags = await findDrift(provider, policy, history);
+      const patternFlags = findProvenanceLaundering(history);
+      return { flags: [...driftFlags, ...patternFlags], actionsTaken: [] };
+    },
+    conflicts() {
+      return store.listConflicts();
     },
     async resolveEscalation(decisionId, { resolution, resolvedBy }) {
       const held = store.getEscalation(decisionId);

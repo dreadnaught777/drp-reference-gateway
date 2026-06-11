@@ -10,13 +10,32 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ActionProposal, Decision, PrincipalCoverage, ReceiptBody } from '../types';
-import type { DrpProvider, EngineInput, LoadedPolicy } from '../providers/types';
-import type { DecisionStore } from '../state/store';
+import type {
+  ActionProposal,
+  ArbitrationRequest,
+  Decision,
+  PrincipalCoverage,
+  ReceiptBody,
+} from '../types';
+import type { DrpProvider, EngineDecision, EngineInput, LoadedPolicy } from '../providers/types';
+import type { ConflictRecord, DecisionStore } from '../state/store';
 import type { ReceiptSigner } from '../state/receipts';
 import type { Tracer } from '@opentelemetry/api';
 import { routeTool, type Downstream } from '../mcp/downstream';
 import { emitDecisionEvent } from '../otel';
+import { arbitrate, type SourceDecision } from '../arbitrate/resolvers';
+
+/**
+ * The decide path consults named sources only through this context, which the
+ * gateway builds from its source registry. Resolver logic stays in the
+ * arbitrate/ layer module; the cross-framework rejection stays here, in the
+ * protocol path where the mixed request arrives.
+ */
+export interface ArbitrationContext {
+  vocabularyOf(source: string): string;
+  evaluate(source: string, input: EngineInput): Promise<EngineDecision>;
+  recordConflict(record: ConflictRecord): void;
+}
 
 export interface DecidePipelineDeps {
   provider: DrpProvider;
@@ -27,6 +46,7 @@ export interface DecidePipelineDeps {
   downstreams: Downstream[];
   now: () => string;
   tracer?: Tracer;
+  arbitration?: ArbitrationContext;
 }
 
 export interface EnactedDecision {
@@ -58,15 +78,15 @@ export function engineInputFrom(proposal: ActionProposal): EngineInput {
   };
 }
 
-/** Forward an allowed (or approved) action to the downstream that handles it. */
+/** Forward an allowed (or approved) action to the downstream that handles it.
+ * If no downstream handles the tool there is nothing to forward, so this is a
+ * no-op returning undefined rather than an error - the allow decision stands. */
 export async function enact(
   downstreams: Downstream[],
   proposal: ActionProposal,
 ): Promise<unknown> {
   const downstream = routeTool(downstreams, proposal.tool);
-  if (!downstream) {
-    throw new Error(`no downstream server handles tool ${proposal.tool}`);
-  }
+  if (!downstream) return undefined;
   return downstream.call(proposal.tool, proposal.args);
 }
 
@@ -78,18 +98,22 @@ export async function enact(
 export async function decide(
   deps: DecidePipelineDeps,
   proposal: ActionProposal,
-  opts: { simulated?: boolean } = {},
+  opts: { simulated?: boolean; arbitration?: ArbitrationRequest } = {},
 ): Promise<EnactedDecision> {
   const simulated = opts.simulated ?? false;
-  const policy = await deps.loadedPolicy();
   const policyVersion = deps.policyVersion();
 
   const input = engineInputFrom(proposal);
-  const eng = await deps.provider.evaluate(input, policy);
-
   const decisionId = newId('d');
   const receiptId = newId('r');
   const ts = deps.now();
+
+  // Produce the engine decision - by single-source evaluation, or, when the
+  // request names sources, by arbitrating across them (layer-side resolver).
+  const { eng, arbitration } = await renderEngineDecision(deps, input, opts.arbitration, {
+    decisionId,
+    ts,
+  });
 
   const decision: Decision = {
     decision: eng.effect,
@@ -107,7 +131,7 @@ export async function decide(
     contextTrusted: null,
     gatedOn: 'declared-action',
     limitations: [],
-    arbitration: null,
+    arbitration,
   };
 
   const body: ReceiptBody = {
@@ -132,6 +156,9 @@ export async function decide(
 
   deps.store.putReceipt(deps.signer.sign(body));
   deps.store.putDecision(decision);
+  // Keep the proposal alongside the decision so reconciliation can replay it
+  // against current policy (simulated decisions are part of the record too).
+  deps.store.recordHistory({ decisionId, proposal, decision: eng.effect, ts });
 
   // Every decision emits the drp.decision OTel event (semantics: the record of
   // what was decided). Suite C asserts it reaches the configured exporter.
@@ -152,4 +179,55 @@ export async function decide(
   }
 
   return { decision, downstreamResult };
+}
+
+/**
+ * Render the engine decision. Without sources, a single provider evaluation.
+ * With sources, evaluate each and arbitrate - rejecting a mixed-vocabulary
+ * request first (the cross-framework limit, semantics section 6), then applying
+ * the layer-side resolver and recording any disagreement as a conflict.
+ */
+async function renderEngineDecision(
+  deps: DecidePipelineDeps,
+  input: EngineInput,
+  request: ArbitrationRequest | undefined,
+  meta: { decisionId: string; ts: string },
+): Promise<{ eng: EngineDecision; arbitration: Decision['arbitration'] }> {
+  const sources = request?.sources ?? [];
+  if (sources.length === 0) {
+    const eng = await deps.provider.evaluate(input, await deps.loadedPolicy());
+    return { eng, arbitration: null };
+  }
+
+  if (!deps.arbitration) {
+    throw new Error('arbitration requested but no policy sources are configured');
+  }
+  const ctx = deps.arbitration;
+
+  // A request mixing vocabularies is rejected, not approximated. This rejection
+  // sits in the protocol path because the runtime is where the mixed request
+  // arrives; same-vocabulary arbitration is the layer's job below.
+  const vocabularies = sources.map((s) => ctx.vocabularyOf(s));
+  if (new Set(vocabularies).size > 1) {
+    throw new Error('cross-framework arbitration not supported');
+  }
+
+  const sourceDecisions: SourceDecision[] = await Promise.all(
+    sources.map(async (source) => ({ source, decision: await ctx.evaluate(source, input) })),
+  );
+
+  const outcome = arbitrate(sourceDecisions, request?.resolver ?? 'most-restrictive', request?.order);
+
+  if (outcome.result.disagreed) {
+    ctx.recordConflict({
+      decisionId: meta.decisionId,
+      ts: meta.ts,
+      sources: sourceDecisions.map((s) => ({ source: s.source, effect: s.decision.effect })),
+      winner: outcome.result.winner,
+      resolver: outcome.result.resolver,
+      disagreed: outcome.result.disagreed,
+    });
+  }
+
+  return { eng: outcome.winner.decision, arbitration: outcome.result };
 }

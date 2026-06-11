@@ -3,17 +3,17 @@
  * within one vocabulary:
  *   - most-restrictive: deny beats escalate beats allow
  *   - priority: explicit order wins regardless of strictness
- * Every disagreement is recorded and queryable at GET /v1/conflicts.
  *
- * Limit (Section 5 / Suite G): sources from different framework vocabularies
- * are rejected with an error matching /cross-framework arbitration not
- * supported/i.
+ * The cross-framework limit (sources of differing vocabularies are rejected)
+ * lives in the decide path, where the mixed request arrives (semantics
+ * section 6); these resolvers only ever see same-vocabulary sources.
  *
- * M0 scaffold: signatures only. Gate: Suite G (M5).
+ * This module is layer-side and separable: it knows nothing about the store,
+ * receipts, or the protocol surface.
  */
 
 import type { EngineDecision } from '../providers/types';
-import type { ArbitrationResult } from '../types';
+import type { ArbitrationResult, Effect } from '../types';
 
 export type Resolver = 'most-restrictive' | 'priority';
 
@@ -22,10 +22,38 @@ export interface SourceDecision {
   decision: EngineDecision;
 }
 
+export interface ArbitrationOutcome {
+  winner: SourceDecision;
+  result: ArbitrationResult;
+}
+
+const RESTRICTIVENESS: Record<Effect, number> = { deny: 3, escalate: 2, allow: 1 };
+
 export function arbitrate(
-  _decisions: SourceDecision[],
-  _resolver: Resolver,
-  _order?: string[],
-): { winner: SourceDecision; result: ArbitrationResult } {
-  throw new Error('arbitration resolvers not implemented until M5');
+  decisions: SourceDecision[],
+  resolver: Resolver,
+  order?: string[],
+): ArbitrationOutcome {
+  if (decisions.length === 0) {
+    throw new Error('arbitration requires at least one source');
+  }
+
+  const disagreed = new Set(decisions.map((d) => d.decision.effect)).size > 1;
+
+  let winner: SourceDecision;
+  if (resolver === 'priority') {
+    // Earliest in the order list wins; sources absent from the order rank last.
+    const rank = (source: string): number => {
+      const i = (order ?? []).indexOf(source);
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    winner = decisions.reduce((best, d) => (rank(d.source) < rank(best.source) ? d : best));
+  } else {
+    // Most-restrictive: deny beats escalate beats allow; ties keep the first.
+    winner = decisions.reduce((best, d) =>
+      RESTRICTIVENESS[d.decision.effect] > RESTRICTIVENESS[best.decision.effect] ? d : best,
+    );
+  }
+
+  return { winner, result: { winner: winner.source, resolver, disagreed } };
 }

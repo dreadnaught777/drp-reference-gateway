@@ -1,14 +1,18 @@
 /**
  * Reconciliation - drift kind (DRP-layer function, NOT protocol). Replays
- * stored receipts since a timestamp against the currently intended policy and
- * returns flags { kind: 'drift', status: 'for-review', ... } for any stored
- * decision the current policy would decide differently.
+ * stored decisions against the currently intended policy and flags any whose
+ * stored effect the current policy would now decide differently.
  *
  * Hard rule (Suite F): reconcile NEVER mutates, reverts, or emits any action.
- * actionsTaken is always [] and no revert field exists.
+ * This module returns flags only - there is no revert path anywhere in it.
  *
- * M0 scaffold: signature only. Gate: Suite F (M5).
+ * This encodes the series' position that security readback feeds
+ * flag-for-review, not auto-revert.
  */
+
+import type { DrpProvider, LoadedPolicy } from '../providers/types';
+import type { HistoryEntry } from '../state/store';
+import { engineInputFrom } from '../pipeline/decide';
 
 export interface ReconcileFlag {
   kind: 'drift' | 'provenance-laundering';
@@ -16,6 +20,29 @@ export interface ReconcileFlag {
   [detail: string]: unknown;
 }
 
-export function findDrift(_since: string): ReconcileFlag[] {
-  throw new Error('reconcile/drift not implemented until M5');
+/**
+ * Compare each stored decision to what the current policy would decide for the
+ * same proposal. A difference is drift, flagged for-review.
+ */
+export async function findDrift(
+  provider: DrpProvider,
+  loaded: LoadedPolicy,
+  history: HistoryEntry[],
+): Promise<ReconcileFlag[]> {
+  const flags: ReconcileFlag[] = [];
+  for (const entry of history) {
+    const { effect } = await provider.evaluate(engineInputFrom(entry.proposal), loaded);
+    if (effect !== entry.decision) {
+      flags.push({
+        kind: 'drift',
+        status: 'for-review',
+        decisionId: entry.decisionId,
+        principal: entry.proposal.principal,
+        resource: entry.proposal.resource.id,
+        was: entry.decision,
+        now: effect,
+      });
+    }
+  }
+  return flags;
 }

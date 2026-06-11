@@ -8,7 +8,7 @@
  * M2 (Suites C, D) behind this same interface.
  */
 
-import type { ActionProposal, Decision, SignedReceipt } from '../types';
+import type { ActionProposal, Decision, Effect, SignedReceipt } from '../types';
 import { GENESIS, hashReceiptBody } from './chain';
 
 /** A held, unexecuted action awaiting escalation resolution. */
@@ -17,6 +17,27 @@ export interface HeldEscalation {
   proposal: ActionProposal;
   createdAt: string;
   status: 'pending' | 'approved' | 'denied';
+}
+
+/**
+ * A past decision with the proposal that produced it, kept so reconciliation
+ * can replay it against current policy. Mirrors a recordedTraffic.jsonl line.
+ */
+export interface HistoryEntry {
+  decisionId: string;
+  proposal: ActionProposal;
+  decision: Effect;
+  ts: string;
+}
+
+/** An arbitration disagreement, recorded for observability (GET /v1/conflicts). */
+export interface ConflictRecord {
+  decisionId: string;
+  ts: string;
+  sources: { source: string; effect: Effect }[];
+  winner: string;
+  resolver: string;
+  disagreed: boolean;
 }
 
 export interface DecisionStore {
@@ -32,6 +53,12 @@ export interface DecisionStore {
   enqueueEscalation(entry: HeldEscalation): void;
   getEscalation(decisionId: string): HeldEscalation | undefined;
   listEscalations(): HeldEscalation[];
+
+  recordHistory(entry: HistoryEntry): void;
+  listHistory(): HistoryEntry[];
+
+  recordConflict(record: ConflictRecord): void;
+  listConflicts(): ConflictRecord[];
 }
 
 export function createStore(): DecisionStore {
@@ -39,6 +66,8 @@ export function createStore(): DecisionStore {
   const receipts = new Map<string, SignedReceipt>();
   const order: string[] = []; // receiptRefs in append order
   const escalations = new Map<string, HeldEscalation>();
+  const history: HistoryEntry[] = [];
+  const conflicts: ConflictRecord[] = [];
 
   return {
     putDecision(decision) {
@@ -76,6 +105,20 @@ export function createStore(): DecisionStore {
     },
     listEscalations() {
       return [...escalations.values()].filter((e) => e.status === 'pending');
+    },
+
+    recordHistory(entry) {
+      history.push(entry);
+    },
+    listHistory() {
+      return [...history];
+    },
+
+    recordConflict(record) {
+      conflicts.push(record);
+    },
+    listConflicts() {
+      return [...conflicts];
     },
   };
 }
