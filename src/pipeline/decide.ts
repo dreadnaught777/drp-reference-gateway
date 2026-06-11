@@ -62,6 +62,15 @@ function principalCoverage(principal: string): PrincipalCoverage {
   return principal.includes('/device/') ? 'partial' : 'full';
 }
 
+/** Limitations the runtime declares it cannot enforce inline for this proposal. */
+function computeLimitations(proposal: ActionProposal): string[] {
+  const limitations: string[] = [];
+  // An action anomalous only against another principal's baseline cannot be
+  // caught by a per-principal decision (Suite L honesty criterion).
+  if (proposal.baselineAnomalyOf) limitations.push('cross-principal-baseline');
+  return limitations;
+}
+
 /** Mint a prefixed, sortable-enough identifier. */
 export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replace(/-/g, '')}`;
@@ -162,6 +171,7 @@ export async function decide(
     decisionId,
     reason: eng.reason,
     receiptRef: receiptId,
+    ts,
     provider: deps.provider.name,
     principal: proposal.principal,
     // A delegated identity (OIDC -> SPIFFE) reports identitySource "delegated".
@@ -173,7 +183,7 @@ export async function decide(
     sawPriorContext,
     contextTrusted,
     gatedOn: 'declared-action',
-    limitations: [],
+    limitations: computeLimitations(proposal),
     arbitration,
   };
 

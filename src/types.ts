@@ -26,6 +26,13 @@ export interface ActionProposal {
     /** base64url signed prior-decision token, or absent. */
     priorContext?: string;
   };
+  /**
+   * Marks an action that is anomalous only relative to another principal's
+   * baseline. The gateway cannot catch this inline (per-principal decisions
+   * cannot see it), so it records the cross-principal-baseline limitation and
+   * does not deny on that basis (Suite L honesty criterion).
+   */
+  baselineAnomalyOf?: string;
 }
 
 /** The verified, decoded prior-context token exposed to policy input. */
@@ -57,6 +64,7 @@ export interface Decision {
   decisionId: string;
   reason: string;
   receiptRef: string;
+  ts: string;
   provider: 'cedar' | 'opa';
   principal: string;
   identitySource: IdentitySource;

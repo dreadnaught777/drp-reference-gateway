@@ -33,11 +33,15 @@ is a release-blocking defect (Suite M).
   is not inside the signed body"). The nested shape would break Suite C's
   offline verification (the helper would canonicalise `{ receipt: ... }`, not
   the signed body).
-- **Resolution:** built to the test plan and brief (flat receipt: body fields
-  plus detached `sig`/`keyId`), per the precedence rule (test plan first). The
-  committed YAML is left unchanged. For a v0.2 of the spec, `SignedReceipt`
-  should be flattened to match, or the helper and brief reconciled the other
-  way - a decision the spec owner should make.
+- **Resolution:** the stored, chained and offline-verified receipt is flat
+  (body fields plus detached `sig`/`keyId`), per the test plan and brief and the
+  precedence rule (test plan first). At the protocol boundary the `GET
+  /receipts/{ref}` response is shaped to the committed `SignedReceipt`
+  (`{ receipt: <body>, sig, keyId }`), so the wire form conforms to the spec
+  (Suite M samples and validates it) while the chain and `verifyReceipt` operate
+  on the flat body - the two carry identical signed content. The committed YAML
+  is left unchanged. For a v0.2 the spec owner should decide whether to flatten
+  `SignedReceipt` so the wire and the offline-verifier shapes coincide.
 
 ### D2 - Published key encoding: PEM vs base64 SPKI
 
@@ -50,5 +54,18 @@ is a release-blocking defect (Suite M).
   explicit `{ format: 'der', type: 'spki' }` wrapper the helper does not apply.
 - **Resolution:** `/keys` publishes the key as PEM (SPKI), which the helper and
   any offline verifier holding the PEM can use directly, per the test plan's
-  use of the published key. Recorded for v0.2: either widen the spec wording to
-  PEM, or have verifiers decode base64 SPKI explicitly.
+  use of the published key. The committed schema constrains `publicKey` only to
+  `type: string` (the "base64 SPKI" is a description, not a constraint), so the
+  PEM string still validates against the spec under Suite M. Recorded for v0.2:
+  either widen the spec wording to PEM, or have verifiers decode base64 SPKI
+  explicitly.
+
+## Completeness
+
+These are the only behavioural differences between the committed specification
+and the implementation encountered across milestones M0-M7. Both are
+representation choices at the wire boundary, recorded above rather than resolved
+by editing `spec/`. No other behavioural difference was found: the conformance
+suite (Suite M) validates sampled live responses against the committed schemas,
+and the protocol/layer split is kept (reconcile and conflicts are DRP-layer
+functions, absent from the committed spec by design).

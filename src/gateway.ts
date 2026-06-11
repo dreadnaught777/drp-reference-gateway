@@ -45,6 +45,7 @@ import { findDrift, type ReconcileFlag } from './reconcile/drift';
 import { findProvenanceLaundering } from './reconcile/patterns';
 import { createMcpProxy, type McpProxyClient } from './mcp/proxy';
 import type { Downstream } from './mcp/downstream';
+import { committedContract } from './contract';
 
 export interface GatewayConfig {
   provider: 'cedar' | 'opa';
@@ -106,6 +107,12 @@ export interface Gateway {
   simulatePolicy(candidate: PolicyBundle): Promise<PolicySimResult>;
   reconcile(req: { since: string }): Promise<ReconcileReport>;
   conflicts(): ConflictRecord[];
+  /** The committed protocol document, served verbatim (Interface 5; Suite J). */
+  openapi(): Record<string, unknown>;
+  /** HTTP-style status for a /v1 path: 200 if the route exists, else 404. */
+  rawStatus(path: string): number;
+  /** Decide returning an HTTP envelope: deny is HTTP 200, not a transport error. */
+  rawDecide(proposal: ActionProposal): Promise<{ status: number; body: Decision }>;
   resolveEscalation(
     decisionId: string,
     resolution: EscalationResolution,
@@ -124,6 +131,30 @@ export interface Gateway {
 
 function makeProvider(name: 'cedar' | 'opa'): DrpProvider {
   return name === 'cedar' ? new CedarProvider() : new OpaProvider();
+}
+
+// Known /v1 routes (the protocol surface plus the DRP-layer functions). Exact
+// routes and the three parameterised prefixes. Used by rawStatus.
+const EXACT_ROUTES = new Set([
+  '/v1/decide',
+  '/v1/policy',
+  '/v1/policy/effective',
+  '/v1/decisions',
+  '/v1/simulate/action',
+  '/v1/simulate/policy',
+  '/v1/reconcile',
+  '/v1/conflicts',
+  '/v1/escalations',
+  '/v1/keys',
+  '/v1/openapi.json',
+  '/v1/healthz',
+]);
+const PREFIX_ROUTES = ['/v1/state/', '/v1/receipts/', '/v1/escalations/'];
+
+function routeExists(path: string): boolean {
+  const clean = path.split('?')[0];
+  if (EXACT_ROUTES.has(clean)) return true;
+  return PREFIX_ROUTES.some((p) => clean.startsWith(p) && clean.length > p.length);
 }
 
 /** Match a SPIFFE principal against a manifest principal pattern ("*" globs). */
@@ -253,6 +284,18 @@ export function createGatewayCore(config: GatewayConfig): Gateway {
     },
     conflicts() {
       return store.listConflicts();
+    },
+    openapi() {
+      return committedContract();
+    },
+    rawStatus(path) {
+      return routeExists(path) ? 200 : 404;
+    },
+    async rawDecide(proposal) {
+      // Deny is not a transport error: all three effects return HTTP 200
+      // (semantics section 2).
+      const { decision } = await decideAndEnact(proposal);
+      return { status: 200, body: decision };
     },
     async resolveEscalation(decisionId, { resolution, resolvedBy }) {
       const held = store.getEscalation(decisionId);
