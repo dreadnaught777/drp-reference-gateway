@@ -107,8 +107,10 @@ export interface PolicyBundle {
   bundleVersion: string;
   vocabulary: string;
   engine: 'cedar' | 'opa';
-  /** Raw policy source (Cedar text or Rego/compiled wasm reference). */
+  /** Raw Cedar policy source (engine: 'cedar'). */
   source?: string;
+  /** Compiled Rego/WASM module bytes (engine: 'opa'). */
+  wasm?: Uint8Array;
   rules?: ManifestRule[];
 }
 
