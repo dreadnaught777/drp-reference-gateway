@@ -18,6 +18,7 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@cedar-policy/cedar-wasm": "^4.11.1",
     "canonicalize": "^2.0.0",
     "yaml": "^2.6.0"
   }
