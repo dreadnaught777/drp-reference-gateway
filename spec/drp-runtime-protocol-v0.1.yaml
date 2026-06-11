@@ -1,0 +1,592 @@
+openapi: 3.1.0
+info:
+  title: DRP Runtime Protocol
+  version: 0.1.0
+  summary: A decide-and-readback interface for agent runtimes
+  description: |
+    NAME IS A PLACEHOLDER - see the naming note in the companion semantics document.
+
+    This document specifies the interface an agent runtime (harness, gateway,
+    or platform) exposes so that an external Declarative Runtime Policy layer
+    can enact policy decisions at the action boundary AND read back what was
+    decided, under which policy, on what assumed state.
+
+    The wire prefix is /v1. The specification is versioned independently of
+    any implementation (semver; this is 0.1.0). Within a major version,
+    changes are additive only. Vendor extensions use the x-drp- prefix.
+
+    Scope rule: this protocol covers only what a RUNTIME must expose.
+    Functions of the policy layer built on top (reconciliation, conflict
+    arbitration across sources) are deliberately out of scope; they are
+    consumers of this protocol, not part of it.
+
+    Normative language (MUST, MUST NOT, SHOULD) follows RFC 2119. Normative
+    behaviour that cannot be expressed in OpenAPI lives in the companion
+    document drp-protocol-semantics-v0.1.md, which is part of this
+    specification.
+  license:
+    name: Apache-2.0
+servers:
+  - url: /v1
+
+paths:
+  /decide:
+    post:
+      operationId: decide
+      summary: Enactment - evaluate and gate a proposed action (Interface 1)
+      description: |
+        The runtime MUST evaluate the proposal against its loaded policy and
+        return allow, deny, or escalate BEFORE the action executes. Absence
+        of a matching rule MUST produce deny (default-deny). An escalate
+        decision MUST hold the action unexecuted until resolved via
+        /escalations/{id}.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionProposal'
+      responses:
+        '200':
+          description: Decision rendered (including deny - a deny is not an HTTP error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /policy:
+    post:
+      operationId: loadPolicy
+      summary: Accept external authoritative policy
+      description: |
+        The runtime MUST accept policy from an external authority and MUST
+        validate it before it can enforce. A bundle that fails validation
+        (including a detectable contradiction) MUST be rejected and MUST NOT
+        replace the active bundle. On success the effective policy version
+        MUST change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyBundle'
+      responses:
+        '204':
+          description: Bundle validated and active
+        '422':
+          description: Bundle rejected by validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /policy/effective:
+    get:
+      operationId: effectivePolicy
+      summary: Readback - the policy currently in force (Interface 2)
+      parameters:
+        - name: principal
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Rules in force for the principal, with bundle version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectivePolicy'
+
+  /decisions:
+    get:
+      operationId: listDecisions
+      summary: Readback - decisions the runtime has made (Interface 2)
+      parameters:
+        - name: principal
+          in: query
+          schema: { type: string }
+        - name: since
+          in: query
+          schema: { type: string, format: date-time }
+        - name: decision
+          in: query
+          schema: { $ref: '#/components/schemas/Effect' }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 1000 }
+      responses:
+        '200':
+          description: Matching decisions, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decisions]
+                properties:
+                  decisions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DecisionSummary'
+
+  /state/{decisionId}:
+    get:
+      operationId: decisionState
+      summary: Readback - what a decision assumed (Interface 2)
+      description: |
+        Returns the receipt reference for a decision plus the state the
+        decision assumed at the moment it was made: at minimum the policy
+        version evaluated, the principal, and any carried prior context that
+        was admitted to policy input.
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The assumed state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /simulate/action:
+    post:
+      operationId: simulateAction
+      summary: Plan - decide without effect (Interface 4, mode a)
+      description: |
+        Identical evaluation path to /decide. The action MUST NOT execute
+        and no escalation MUST be queued. The receipt produced MUST be
+        marked simulated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionProposal'
+      responses:
+        '200':
+          description: The decision the runtime would make
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+
+  /simulate/policy:
+    post:
+      operationId: simulatePolicy
+      summary: Plan - candidate policy vs recorded decisions (Interface 4, mode b)
+      description: |
+        Evaluates a candidate bundle against previously recorded proposals
+        and reports which decisions change. The response MUST identify the
+        traffic source; in this version only recorded traffic is defined.
+        Note: a runtime that implements /decisions and /state readback makes
+        this mode implementable externally; the endpoint exists so the
+        capability is available even to consumers without full history.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidate]
+              properties:
+                candidate:
+                  $ref: '#/components/schemas/PolicyBundle'
+                since:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Decision diff
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDiff'
+
+  /escalations:
+    get:
+      operationId: listEscalations
+      summary: Pending escalated actions
+      responses:
+        '200':
+          description: Escalations awaiting resolution
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [escalations]
+                properties:
+                  escalations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Escalation'
+
+  /escalations/{id}:
+    post:
+      operationId: resolveEscalation
+      summary: Resolve an escalated action
+      description: |
+        Approval releases the held action for execution; denial discards it.
+        Resolution MUST itself produce a decision receipt attributing the
+        resolving principal.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution, resolvedBy]
+              properties:
+                resolution:
+                  type: string
+                  enum: [approve, deny]
+                resolvedBy:
+                  type: string
+                  description: SPIFFE ID of the resolving principal
+      responses:
+        '200':
+          description: Resolution applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /receipts/{ref}:
+    get:
+      operationId: getReceipt
+      summary: Fetch a receipt for offline verification (Interface 3, record half)
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The receipt and its detached signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedReceipt'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /keys:
+    get:
+      operationId: getKeys
+      summary: Published verification keys
+      responses:
+        '200':
+          description: Active and retired Ed25519 public keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [keyId, alg, publicKey]
+                      properties:
+                        keyId: { type: string }
+                        alg: { type: string, enum: [Ed25519] }
+                        publicKey: { type: string, description: base64 SPKI }
+                        retired: { type: boolean, default: false }
+
+  /openapi.json:
+    get:
+      operationId: getContract
+      summary: The contract this runtime implements (Interface 5)
+      description: |
+        MUST return the protocol document the runtime conforms to, including
+        the protocol version, so a consumer can negotiate capability.
+      responses:
+        '200':
+          description: This document
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  responses:
+    BadRequest:
+      description: Malformed proposal or unsupported source combination
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Unknown identifier
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Effect:
+      type: string
+      enum: [allow, deny, escalate]
+
+    ActionProposal:
+      type: object
+      required: [principal, tool, declaredAction, resource]
+      properties:
+        principal:
+          type: string
+          description: SPIFFE ID, or an artefact attestation subject
+        identitySource:
+          type: string
+          enum: [native, delegated]
+          default: native
+        tool:
+          type: string
+        declaredAction:
+          type: string
+          description: |
+            The typed declaration of what the action does. The runtime gates
+            on this declaration; see the semantics document on the untrusted
+            model and gatedOn.
+        resource:
+          type: object
+          required: [kind, id]
+          properties:
+            kind: { type: string }
+            id: { type: string }
+        args:
+          type: object
+          additionalProperties: true
+        context:
+          type: object
+          properties:
+            traceparent:
+              type: string
+              description: W3C Trace Context
+            priorContext:
+              type: string
+              description: base64url ContextToken from an earlier decision
+
+    Decision:
+      type: object
+      required: [decision, decisionId, reason, receiptRef, principal, policyVersion, gatedOn]
+      properties:
+        decision: { $ref: '#/components/schemas/Effect' }
+        decisionId: { type: string }
+        reason: { type: string }
+        receiptRef: { type: string }
+        provider:
+          type: string
+          description: Which engine produced the decision (observability)
+        principal: { type: string }
+        identitySource: { type: string, enum: [native, delegated] }
+        principalCoverage:
+          type: string
+          enum: [full, partial]
+          description: partial marks principal types the runtime models incompletely
+        policyVersion: { type: string }
+        contextToken:
+          type: string
+          description: Signed token for downstream carriage (Interface 3)
+        traceparent: { type: string }
+        sawPriorContext: { type: boolean }
+        contextTrusted:
+          type: [boolean, 'null']
+          description: false when a presented prior context failed verification
+        gatedOn:
+          type: string
+          enum: [declared-action]
+          description: The decision gated the declaration, not the tool's internals
+        limitations:
+          type: array
+          items: { type: string }
+        simulated: { type: boolean, default: false }
+        arbitration:
+          type: [object, 'null']
+          properties:
+            winner: { type: string }
+            resolver: { type: string, enum: [most-restrictive, priority] }
+            disagreed: { type: boolean }
+
+    DecisionSummary:
+      type: object
+      required: [decisionId, decision, principal, ts]
+      properties:
+        decisionId: { type: string }
+        decision: { $ref: '#/components/schemas/Effect' }
+        principal: { type: string }
+        tool: { type: string }
+        ts: { type: string, format: date-time }
+        receiptRef: { type: string }
+        policyVersion: { type: string }
+
+    DecisionState:
+      type: object
+      required: [decisionId, receiptRef, assumed]
+      properties:
+        decisionId: { type: string }
+        receiptRef: { type: string }
+        assumed:
+          type: object
+          required: [policyVersion, principal]
+          properties:
+            policyVersion: { type: string }
+            principal: { type: string }
+            priorContext:
+              type: [object, 'null']
+              description: The verified prior context admitted to policy input, if any
+
+    EffectivePolicy:
+      type: object
+      required: [principal, version, rules]
+      properties:
+        principal: { type: string }
+        version: { type: string }
+        vocabulary: { type: string }
+        rules:
+          type: array
+          items:
+            type: object
+            required: [id, effect]
+            properties:
+              id: { type: string }
+              effect: { $ref: '#/components/schemas/Effect' }
+              summary: { type: string }
+
+    PolicyBundle:
+      type: object
+      required: [manifest, files]
+      properties:
+        manifest:
+          type: object
+          required: [bundleVersion, vocabulary, engine, rules]
+          properties:
+            bundleVersion: { type: string }
+            vocabulary:
+              type: string
+              description: |
+                The schema family the bundle's rules are expressed in. Sources
+                with differing vocabularies MUST NOT be silently combined.
+            engine: { type: string }
+            rules:
+              type: array
+              items:
+                type: object
+                required: [id, effect]
+                properties:
+                  id: { type: string }
+                  principals:
+                    type: array
+                    items: { type: string }
+                  effect: { $ref: '#/components/schemas/Effect' }
+                  summary: { type: string }
+        files:
+          type: object
+          additionalProperties:
+            type: string
+          description: Policy source files keyed by filename, content base64
+
+    PolicyDiff:
+      type: object
+      required: [flipped, unchanged, trafficSource]
+      properties:
+        flipped:
+          type: array
+          items:
+            type: object
+            required: [decisionId, from, to]
+            properties:
+              decisionId: { type: string }
+              from: { $ref: '#/components/schemas/Effect' }
+              to: { $ref: '#/components/schemas/Effect' }
+        unchanged: { type: integer }
+        trafficSource:
+          type: string
+          enum: [recorded]
+          description: Live shadow traffic is not defined in this version
+
+    Escalation:
+      type: object
+      required: [id, decisionId, proposal, ts]
+      properties:
+        id: { type: string }
+        decisionId: { type: string }
+        proposal: { $ref: '#/components/schemas/ActionProposal' }
+        ts: { type: string, format: date-time }
+
+    SignedReceipt:
+      type: object
+      required: [receipt, sig, keyId]
+      properties:
+        receipt:
+          $ref: '#/components/schemas/Receipt'
+        sig:
+          type: string
+          description: base64 Ed25519 signature over SHA-256 of the JCS canonicalised receipt
+        keyId: { type: string }
+
+    Receipt:
+      type: object
+      required: [v, receiptId, decisionId, ts, principal, action, decision, reason, policyVersion, assumed, simulated, prevHash]
+      properties:
+        v: { type: integer, const: 1 }
+        receiptId: { type: string }
+        decisionId: { type: string }
+        ts: { type: string, format: date-time }
+        principal: { type: string }
+        action:
+          type: object
+          required: [tool, declaredAction, resource]
+          properties:
+            tool: { type: string }
+            declaredAction: { type: string }
+            resource: { type: string }
+        decision: { $ref: '#/components/schemas/Effect' }
+        reason: { type: string }
+        provider: { type: string }
+        policyVersion: { type: string }
+        assumed:
+          type: object
+          required: [policyVersion, principal]
+          properties:
+            policyVersion: { type: string }
+            principal: { type: string }
+            priorContext: { type: [object, 'null'] }
+        simulated: { type: boolean }
+        prevHash:
+          type: string
+          description: SHA-256 of the prior receipt's JCS form; the literal "genesis" for the first
+
+    ContextToken:
+      type: object
+      description: |
+        Payload of the signed carriage token (Interface 3). Serialised as
+        base64url(JCS(payload)) + "." + base64url(Ed25519 signature).
+      required: [decisionId, principal, action, decision, policyVersion, iat]
+      properties:
+        decisionId: { type: string }
+        principal: { type: string }
+        action: { type: string }
+        decision: { $ref: '#/components/schemas/Effect' }
+        policyVersion: { type: string }
+        iat: { type: integer, description: Unix seconds }
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string }
+        message: { type: string }
