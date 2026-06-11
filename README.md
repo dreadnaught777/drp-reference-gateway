@@ -101,3 +101,42 @@ OPA, signed and chained receipts, readback, simulation, reconciliation,
 arbitration, cross-principal identity, context carriage, the three demo
 scenarios, the served contract, the honesty acceptance group, and protocol
 conformance.
+
+## Governing the tool that built it
+
+A Claude Code `PreToolUse` hook adapter under `scripts/claude-code-hook/` routes
+every tool call through the gateway's `/v1/decide`, so the gateway can govern
+Claude Code itself. The adapter (`adapter.mjs`) reads the hook JSON on stdin,
+POSTs a proposal to a running gateway, and maps a `deny` decision to the hook's
+`permissionDecision: "deny"` (an `escalate` maps to `"ask"`; an `allow` defers
+to the normal permission flow), per the Claude Code hooks reference at
+https://code.claude.com/docs/en/hooks.
+
+Start a gateway, then wire the adapter into `.claude/settings.json`:
+
+```
+npm run serve:gateway   # http://127.0.0.1:8787
+```
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/scripts/claude-code-hook/adapter.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+See `scripts/claude-code-hook/README.md` for the configuration environment
+variables and the decision mapping. This is a stretch beyond the conformance
+suite; an integration test (`test/stretch-hook-adapter.test.ts`) proves a denied
+tool is blocked through the adapter.

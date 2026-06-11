@@ -10,10 +10,12 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build:rego": "bash scripts/build-rego.sh"
+    "build:rego": "bash scripts/build-rego.sh",
+    "serve:gateway": "tsx scripts/claude-code-hook/serve.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
